@@ -69,5 +69,111 @@ io.on('connection', client =>{
             }
         }
         client.emit('checkUserDetailResponse', !registered);
-    })
+    });
+
+    //send a list of all users available to play the game to a client
+    client.on('getOpponents', data =>{
+        let response = []; // initialize as empty  
+
+        for(let id in sockets){
+            const isNotYouAndNotPlaying = id !== client.id && !sockets[id].is_playing;
+            if(isNotYouAndNotPlaying){
+                response.push({
+                    id,
+                    mobile_number : sockets[id].mobile_number,
+                    played : players[sockets[id].mobile_number].played,
+                    won: players[sockets[id].mobile_number].won,
+                    draw: players[sockets[id].mobile_number].draw
+                });
+            }
+        }
+
+        // wait and retrieve opponents response after sending invitation to play
+        client.emit('getOpponentsResponse', response);
+
+        client.broadcast.emit('newOpponentAdded', {
+            id: client.id,  
+            mobile_number: sockets[client.id].mobile_number,  
+            played: players[sockets[client.id].mobile_number].played,  
+            won: players[sockets[client.id].mobile_number].won,  
+            draw: players[sockets[client.id].mobile_number].draw
+        });
+    });
+
+    //When Client select any opponent to play game then it will generate new game. New game starts here
+    client.on('selectOpponent', data =>{
+        let response = {
+            status : false,
+            message : 'Opponent is playing with someone else!!'
+        }
+
+        let isOpponentPlaying = !sockets[data.id].is_playing;
+
+        if(isOpponentPlaying){
+            //generate a random Id for the ongoing game
+            let gameId = uuidv4();
+            sockets[data.id].is_playing = true;
+            sockets[client.id].is_playing = true;
+            sockets[data.id].game_id = gameId;
+            sockets[client.id].game_id = gameId;
+            players[sockets[data.id].mobile_number].played = players[sockets[data.id].mobile_number].played + 1;  
+            players[sockets[client.id].mobile_number].played = players[sockets[client.id].mobile_number].played + 1;
+
+            //initialize empty(new) game
+            games[gameId] = {
+                player1 : client.id,
+                player2 : data.id,
+                whoseTurnToStart : client.id,
+                playboard : [["", "", ""], ["", "", ""], ["", "", ""]], // set new game with empty grid
+                game_status : "ongoing",  // can be (ongoing, won, draw)
+                gameWinner : null, // no winner yet
+                winning_combination : []
+            }
+
+            //player 1 details
+            games[gameId][client.id] = {
+                mobile_number : sockets[client.id].mobile_number,
+                sign : "X",
+                played: players[sockets[client.id].mobile_number].played,  
+                won: players[sockets[client.id].mobile_number].won,  
+                draw: players[sockets[client.id].mobile_number].draw
+            };
+
+            //player 2 details
+            games[gameId][data.id] = {
+                mobile_number : sockets[data.id].mobile_number,
+                sign : "O",
+                played: players[sockets[data.id].mobile_number].played,  
+                won: players[sockets[data.id].mobile_number].won,  
+                draw: players[sockets[data.id].mobile_number].draw 
+            };
+
+            // join the two players
+            io.sockets.connected[client.id].join(gameId);
+            io.sockets.connected[data.id].join(gameId);
+
+            // exclude the 2 players from being selected for another new game from a different player
+            io.emit('excludePlayers', [client.id, data.id]);
+
+            // broadcast game details!!
+            io.to(gameId).emit('gameStarted', {
+                status : true,
+                game_id : gameId,
+                game_data : games[gameId]
+            });
+        }
+    });
+
+    let gameBetweenInSeconds = 15; // time between next game
+    let gameBetweenInterval = null;
 })
+
+
+// Generate Game ID  
+// Gotten from stack overflow
+function uuidv4() {  
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {  
+        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);  
+        return v.toString(16);  
+    });  
+} 
