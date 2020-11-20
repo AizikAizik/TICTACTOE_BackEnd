@@ -312,7 +312,7 @@ io.on('connection', client =>{
 
 server.listen(PORT);
 
-console.log(`listening on port ${PORT}`);
+console.log(`listening on port ${PORT}`.green);
 
 // Generate Game ID  
 // Gotten from stack overflow
