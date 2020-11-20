@@ -1,15 +1,14 @@
-const server = require('http').createServer();
-const io = require('socket.io');
-const colors = require('colors')
-
-//bind socket to server
-io(server);
+const express = require('express');
+const app = express();
+const server = require('http').createServer(app);
+const io = require('socket.io')(server);
+const colors = require('colors');
+const cors = require('cors')
 
 //port of server
 const PORT = process.env.PORT || 8080;
 
-//hosting server
-const HOST = process.env.HOST || "127.0.0.1";
+app.use(cors());
 
 let players = {} //map for storing details about all the players
 
@@ -166,8 +165,154 @@ io.on('connection', client =>{
 
     let gameBetweenInSeconds = 15; // time between next game
     let gameBetweenInterval = null;
-})
 
+    // logic for handling when any of the player selects a cell
+    client.on('selectCell', (data) =>{
+        games[data.gameId].playboard[data.i][data.j] = games[data.gameId][games[data.gameId].whose_turn].sign;
+
+        let isDraw = true; //when game starts there's no winner yet
+
+        for(let i=0; i < 3; i++){
+            for (let j = 0; j < 3; j++) {
+                if(games[data.gameId].playboard[i][j] === ''){
+                    isDraw = false;
+                    break;
+                }
+            }
+        }
+
+        if(isDraw){
+            games[data.gameId].game_status = 'draw';
+        }
+
+        //check if theres a winner by looping through the winning combinations
+        for(let i =0; i < winningCombinations.length; i++){
+            let tempComb = games[data.gameId].playboard[winCombinations[i][0][0]][winCombinations[i][0][1]]
+                + games[data.gameId].playboard[winCombinations[i][1][0]][winCombinations[i][1][1]]
+                + games[data.gameId].playboard[winCombinations[i][2][0]][winCombinations[i][2][1]]; 
+
+            if(tempComb === 'XXX' || tempComb === 'OOO'){
+                games[data.gameId].game_winner = games[data.gameId].whose_turn;
+                games[data.gameId].game_status = "won";
+                games[data.gameId].winning_combination = [
+                    [winCombinations[i][0][0], winCombinations[i][0][1]],
+                    [winCombinations[i][1][0], winCombinations[i][1][1]],
+                    [winCombinations[i][2][0], winCombinations[i][2][1]]
+                ];
+
+                // increment the number of wins for the player who won
+                players[games[data.gameId][games[data.gameId].game_winner].mobile_number].won++;
+            }
+        }
+
+        // increment the number of draws for both players if game ends in a Tie
+        if(games[data.gameId].game_status === 'draw'){
+            players[games[data.gameId][games[data.gameId].player1].mobile_number].draw++;  
+            players[games[data.gameId][games[data.gameId].player2].mobile_number].draw++;
+        }
+
+        games[data.gameId].whose_turn = data[data.gameId].whose_turn == games[data.gameId.player1]
+            ?
+            games[data.gameId].player2 //true
+            :
+            games[data.gameId].player1; // false
+
+        io.to(data.gameId).emit('selectCellResponse', games[data.gameId]);
+
+        // reset game and start a new game
+        if(games[data.gameId].game_status === 'draw' || ames[data.gameId].game_status === 'won'){
+            gameBetweenInSeconds = 15;
+            gameBetweenInterval = setInterval(() =>{
+                gameBetweenInSeconds--;
+                io.to(data.gameId).emit('gameInterval', gameBetweenInSeconds);
+
+                if(gameBetweenInSeconds === 0){
+                    clearInterval(gameBetweenInterval);
+
+                    //create a new gameID for the new game
+                    let gameId = uuidv4();
+                    sockets[games[data.gameId].player1].game_id = gameId;
+                    sockets[games[data.gameId].player2].game_id = gameId;
+
+                    players[sockets[games[data.gameId].player1].mobile_number].played = players[sockets[games[data.gameId].player1].mobile_number].played + 1;  
+                    players[sockets[games[data.gameId].player2].mobile_number].played = players[sockets[games[data.gameId].player2].mobile_number].played + 1;
+
+                    //set Game details
+                    games[gameId] = {
+                        player1 : games[data.gameId].player1,
+                        player2 : games[data.gameId].player2,
+                        whose_turn : games[data.gameId].game_status == "won" ? games[data.gameId].game_winner : games[data.gameId].whose_turn,
+                        playboard : [
+                            ['', '', ''],
+                            ['', '', ''],
+                            ['', '', '']
+                        ],
+                        game_status : 'ongoing',
+                        game_winner : null,
+                        winning_combination : []
+                    };
+
+                    //set player1 details
+                    games[gameId][games[data.gameId].player1] = {  
+                        mobile_number: sockets[games[data.gameId].player1].mobile_number,  
+                        sign: "X",  
+                        played: players[sockets[games[data.gameId].player1].mobile_number].played,  
+                        won: players[sockets[games[data.gameId].player1].mobile_number].won,  
+                        draw: players[sockets[games[data.gameId].player1].mobile_number].draw  
+                    };
+
+                    //set player2 details
+                    games[gameId][games[data.gameId].player2] = {  
+                        mobile_number: sockets[games[data.gameId].player2].mobile_number,
+                        sign: "O",
+                        played: players[sockets[games[data.gameId].player2].mobile_number].played,
+                        won: players[sockets[games[data.gameId].player2].mobile_number].won,
+                        draw: players[sockets[games[data.gameId].player2].mobile_number].draw
+                    };
+
+                    io.sockets.connected[games[data.gameId].player1].join(gameId);
+                    io.sockets.connected[games[data.gameId].player2].join(gameId);
+
+                    io.to(gameId).emit('nextGameData', { status: true, game_id: gameId, game_data: games[gameId] });
+
+                    io.sockets.connected[games[data.gameId].player1].leave(data.gameId);
+                    io.sockets.connected[games[data.gameId].player2].leave(data.gameId);
+                    delete games[data.gameId];
+                }
+            }, 1000);
+        }
+    });
+
+    // handle scenario when a client disconnects or looses connection
+    client.on('disconnect', () =>{
+        console.log(`disconnected : ${client.id}`);
+        if(typeof sockets[client.id] !== undefined){
+            if(sockets[client.id].is_playing){
+                io.to(sockets[client.id].game_id).emit('opponentLeft', {});
+                players[sockets[games[sockets[client.id].game_id].player1].mobile_number].played--;
+                players[sockets[games[sockets[client.id].game_id].player2].mobile_number].played--;
+
+                io.sockets.connected[client.id == games[sockets[client.id].game_id].player1 
+                    ?
+                    games[sockets[client.id].game_id].player2
+                    :
+                    games[sockets[client.id].game_id].player1].leave(sockets[client.id].game_id);
+
+                delete games[sockets[client.id].game_id]
+            }
+        }
+
+        delete sockets[client.id];
+
+        client.broadcast.emit('opponentDisconnected', {
+            id : client.id
+        });
+    });
+});
+
+server.listen(PORT);
+
+console.log(`listening on port ${PORT}`);
 
 // Generate Game ID  
 // Gotten from stack overflow
